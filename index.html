@@ -1,19 +1,581 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Web của Tuấn</title>
-    <link rel="stylesheet" href="style.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>For Minh Ngọc</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Cormorant+Garamond:ital@1&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #000;
+    overflow: hidden;
+    cursor: none;
+    font-family: 'Cinzel', serif;
+  }
+  canvas {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    display: block;
+  }
+  .ui {
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    pointer-events: none;
+    z-index: 10;
+  }
+  .glyph {
+    font-size: 5rem;
+    color: rgba(255,255,255,0.04);
+    line-height: 1;
+    letter-spacing: .1em;
+  }
+  .label {
+    font-size: .55rem;
+    letter-spacing: .5em;
+    color: rgba(255,255,255,0.06);
+    margin-top: .5rem;
+    text-transform: uppercase;
+  }
+  .corner {
+    position: fixed;
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-size: .7rem;
+    letter-spacing: .2em;
+    color: rgba(255,255,255,0.12);
+    pointer-events: none;
+  }
+  .tl { top: 1.5rem; left: 2rem; }
+  .br { bottom: 1.5rem; right: 2rem; }
+</style>
 </head>
 <body>
-    <div class="container">
-        <h1>Website Đã Hoạt Động!</h1>
-        <p>Đây là nội dung được trang trí bởi CSS.</p>
-        <button onclick="chaoMung()">Bấm vào tôi đi</button>
-    </div>
 
-    <script src="script.js"></script>
+<canvas id="c"></canvas>
+
+<div class="ui">
+  <div class="glyph">♏</div>
+  <div class="label">Scorpio Cursor</div>
+</div>
+
+<div class="corner tl">SCORPIO ♏</div>
+<div class="corner br">Interactive Skeleton</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+window.addEventListener('resize', () => {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+});
+
+// ─── Mouse
+const mouse = { x: canvas.width / 2, y: canvas.height / 2, left: false, right: false };
+document.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+
+// Smoothed target — scorpion lazily follows this instead of snapping to mouse
+const target = { x: canvas.width / 2, y: canvas.height / 2 };
+const FOLLOW_SPEED = 0.055; // lower = slower/lazier
+
+document.addEventListener('mousedown', e => {
+  if (e.button === 0) mouse.left = true;
+  if (e.button === 2) mouse.right = true;
+});
+document.addEventListener('mouseup', e => {
+  if (e.button === 0) mouse.left = false;
+  if (e.button === 2) mouse.right = false;
+});
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+// ─── Scorpion configuration
+const BODY_SEGS   = 14;   // main body segments
+const TAIL_SEGS   = 8;    // tail segments (curling)
+const SEG_LEN     = 18;   // distance between segment centers
+const TAIL_SEG_LEN = 14;
+
+// ─── Segment class (inverse kinematics chain)
+class Segment {
+  constructor(x, y, len, angle = 0) {
+    this.x = x; this.y = y;
+    this.len = len;
+    this.angle = angle;
+    this.prevX = x; this.prevY = y;
+  }
+  follow(tx, ty) {
+    this.angle = Math.atan2(ty - this.y, tx - this.x);
+    this.x = tx - Math.cos(this.angle) * this.len;
+    this.y = ty - Math.sin(this.angle) * this.len;
+  }
+  update(tx, ty) {
+    this.prevX = this.x; this.prevY = this.y;
+    this.follow(tx, ty);
+  }
+  get tipX() { return this.x + Math.cos(this.angle) * this.len; }
+  get tipY() { return this.y + Math.sin(this.angle) * this.len; }
+}
+
+// Build body chain
+const body = [];
+for (let i = 0; i < BODY_SEGS; i++) {
+  body.push(new Segment(canvas.width/2 - i * SEG_LEN, canvas.height/2, SEG_LEN));
+}
+
+// Build tail chain (starts at end of body)
+const tail = [];
+for (let i = 0; i < TAIL_SEGS; i++) {
+  tail.push(new Segment(body[BODY_SEGS-1].x - i * TAIL_SEG_LEN, canvas.height/2 + i * 6, TAIL_SEG_LEN));
+}
+
+// Tail curl offset per frame
+let tailCurlOffset = 0;
+
+// ─── Draw helpers
+function line(x1, y1, x2, y2, alpha = 1, w = 1) {
+  ctx.globalAlpha = alpha;
+  ctx.lineWidth = w;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+function circle(x, y, r, fill = true, alpha = 1) {
+  ctx.globalAlpha = alpha;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  fill ? ctx.fill() : ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+// Draw a single body segment with ribs
+function drawBodySegment(seg, idx, total, color) {
+  const t = idx / total;
+  const scale = 1 - t * 0.5; // body tapers toward tail
+  const ribLen = (8 + scale * 6); // rib length
+  const perpA = seg.angle + Math.PI / 2;
+
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+
+  // Spine line
+  const alpha = 0.7 + 0.3 * (1 - t);
+  line(seg.x, seg.y, seg.tipX, seg.tipY, alpha, 1.2 * scale);
+
+  // Ribs (both sides)
+  const midX = (seg.x + seg.tipX) / 2;
+  const midY = (seg.y + seg.tipY) / 2;
+
+  for (let side = -1; side <= 1; side += 2) {
+    const rx = midX + Math.cos(perpA) * side * ribLen * scale;
+    const ry = midY + Math.sin(perpA) * side * ribLen * scale;
+
+    ctx.globalAlpha = 0.45 * (1 - t * 0.6);
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(midX, midY);
+    ctx.lineTo(rx, ry);
+    ctx.stroke();
+
+    // rib tip dot
+    circle(rx, ry, 0.9 * scale, true, 0.35);
+  }
+
+  // Segment joint dot
+  circle(seg.x, seg.y, 2.5 * scale, true, 0.9);
+}
+
+// Draw claw (two curved prongs)
+function drawClaw(x, y, angle, size, color) {
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 1.2;
+
+  for (let side = -1; side <= 1; side += 2) {
+    const spreadAngle = angle + side * 0.45;
+    const clawLen = size * 1.3;
+
+    // upper arm
+    const ax = x + Math.cos(spreadAngle) * size;
+    const ay = y + Math.sin(spreadAngle) * size;
+    // claw tip
+    const cx = ax + Math.cos(spreadAngle - side * 0.7) * clawLen;
+    const cy = ay + Math.sin(spreadAngle - side * 0.7) * clawLen;
+    // inner claw
+    const dx = ax + Math.cos(spreadAngle - side * 0.3) * clawLen * 0.7;
+    const dy = ay + Math.sin(spreadAngle - side * 0.3) * clawLen * 0.7;
+
+    ctx.globalAlpha = 0.8;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(ax, ay);
+    ctx.stroke();
+
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(cx, cy);
+    ctx.stroke();
+
+    ctx.globalAlpha = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(dx, dy);
+    ctx.stroke();
+
+    // tip dot
+    circle(cx, cy, 1.5, true, 0.9);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// Draw head with eyes and mandibles
+function drawHead(seg, color) {
+  const hx = seg.tipX;
+  const hy = seg.tipY;
+  const a = seg.angle;
+  const perpA = a + Math.PI / 2;
+
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+
+  // Head outline
+  ctx.globalAlpha = 0.9;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  const hw = 10, hl = 14;
+  ctx.save();
+  ctx.translate(hx, hy);
+  ctx.rotate(a);
+  // trapezoidal head shape
+  ctx.moveTo(0, -hw * 0.5);
+  ctx.lineTo(hl * 0.7, -hw * 0.7);
+  ctx.lineTo(hl, -hw * 0.3);
+  ctx.lineTo(hl, hw * 0.3);
+  ctx.lineTo(hl * 0.7, hw * 0.7);
+  ctx.lineTo(0, hw * 0.5);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.globalAlpha = 0.15;
+  ctx.fill();
+  ctx.restore();
+  ctx.globalAlpha = 1;
+
+  // Eyes (two dots)
+  for (let side = -1; side <= 1; side += 2) {
+    const ex = hx + Math.cos(a) * 8 + Math.cos(perpA) * side * 4;
+    const ey = hy + Math.sin(a) * 8 + Math.sin(perpA) * side * 4;
+    circle(ex, ey, 2, true, 1.0);
+    // eye glow
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 6;
+    circle(ex, ey, 1, true, 1.0);
+    ctx.shadowBlur = 0;
+  }
+
+  // Chelicerae (front mandibles)
+  for (let side = -1; side <= 1; side += 2) {
+    const mx = hx + Math.cos(a) * 14 + Math.cos(perpA) * side * 5;
+    const my = hy + Math.sin(a) * 14 + Math.sin(perpA) * side * 5;
+    const tx = mx + Math.cos(a + side * 0.4) * 8;
+    const ty = my + Math.sin(a + side * 0.4) * 8;
+
+    ctx.globalAlpha = 0.7;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(hx + Math.cos(a)*12, hy + Math.sin(a)*12);
+    ctx.lineTo(mx, my);
+    ctx.lineTo(tx, ty);
+    ctx.stroke();
+    circle(tx, ty, 1.5, true, 0.9);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Draw stinger at tail tip
+function drawStinger(seg, color) {
+  const tx = seg.x;
+  const ty = seg.y;
+  const a = seg.angle + Math.PI; // pointing backward
+
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+
+  // stinger bulb
+  circle(tx, ty, 5, false, 0.8);
+  circle(tx, ty, 3, true, 0.6);
+
+  // stinger spike
+  const sx = tx + Math.cos(a) * 16;
+  const sy = ty + Math.sin(a) * 16;
+  ctx.globalAlpha = 0.9;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(tx, ty);
+  ctx.lineTo(sx, sy);
+  ctx.stroke();
+  circle(sx, sy, 1.5, true, 1.0);
+
+  // glow on tip
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 10;
+  circle(sx, sy, 1, true, 1.0);
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+}
+
+// Draw pedipalp arms (front claws)
+function drawPedipalps(headSeg, color) {
+  const a = headSeg.angle;
+  drawClaw(headSeg.tipX, headSeg.tipY, a, 12, color);
+}
+
+// ─── Walking Legs System
+// 4 pairs of legs (8 legs total), each with IK foot targeting
+const NUM_LEG_PAIRS = 4;
+const LEG_REACH = 32;       // max foot distance from hip
+const STEP_THRESHOLD = 18;  // distance before taking a step
+const STEP_SPEED = 0.09;    // foot lerp speed when stepping (slowed from 0.18)
+
+// Which body segments host each leg pair (evenly across body)
+const LEG_BODY_IDX = [3, 5, 7, 9];
+
+// For each leg: { footX, footY, targetX, targetY, stepping, stepT, phase }
+const legs = [];
+for (let p = 0; p < NUM_LEG_PAIRS; p++) {
+  for (let side = -1; side <= 1; side += 2) {
+    const seg = body[LEG_BODY_IDX[p]];
+    const perpA = (seg ? seg.angle : 0) + Math.PI / 2;
+    legs.push({
+      pairIdx: p,
+      side,
+      footX: (seg ? seg.x : canvas.width/2) + Math.cos(perpA) * side * LEG_REACH,
+      footY: (seg ? seg.y : canvas.height/2) + Math.sin(perpA) * side * LEG_REACH,
+      targetX: 0, targetY: 0,
+      stepping: false,
+      stepT: 1,
+      prevFootX: 0, prevFootY: 0,
+      phase: p * 0.5 + (side > 0 ? 0.25 : 0) // alternating gait
+    });
+  }
+}
+
+let legTime = 0;
+
+function updateLegs() {
+  legTime += 0.03;
+
+  legs.forEach(leg => {
+    const seg = body[LEG_BODY_IDX[leg.pairIdx]];
+    if (!seg) return;
+
+    const perpA = seg.angle + Math.PI / 2;
+    const hipX = seg.x + Math.cos(seg.angle) * seg.len * 0.5;
+    const hipY = seg.y + Math.sin(seg.angle) * seg.len * 0.5;
+
+    // Ideal foot position: offset from hip + small walking oscillation
+    const walkOffset = Math.sin(legTime + leg.phase * Math.PI * 2) * 5;
+    const idealX = hipX + Math.cos(perpA) * leg.side * (LEG_REACH * 0.75)
+                        + Math.cos(seg.angle) * walkOffset;
+    const idealY = hipY + Math.sin(perpA) * leg.side * (LEG_REACH * 0.75)
+                        + Math.sin(seg.angle) * walkOffset;
+
+    const dx = idealX - leg.footX;
+    const dy = idealY - leg.footY;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+
+    // Trigger a step if foot is too far from ideal
+    if (!leg.stepping && dist > STEP_THRESHOLD) {
+      leg.stepping = true;
+      leg.stepT = 0;
+      leg.prevFootX = leg.footX;
+      leg.prevFootY = leg.footY;
+      leg.targetX = idealX + Math.cos(seg.angle) * 8; // overshoot slightly
+      leg.targetY = idealY + Math.sin(seg.angle) * 8;
+    }
+
+    if (leg.stepping) {
+      leg.stepT = Math.min(1, leg.stepT + STEP_SPEED);
+      const t = leg.stepT;
+      const ease = t < 0.5 ? 2*t*t : -1+(4-2*t)*t; // ease in-out
+      leg.footX = leg.prevFootX + (leg.targetX - leg.prevFootX) * ease;
+      leg.footY = leg.prevFootY + (leg.targetY - leg.prevFootY) * ease;
+      if (leg.stepT >= 1) leg.stepping = false;
+    }
+  });
+}
+
+function drawLegs(color) {
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+
+  legs.forEach(leg => {
+    const seg = body[LEG_BODY_IDX[leg.pairIdx]];
+    if (!seg) return;
+
+    const hipX = seg.x + Math.cos(seg.angle) * seg.len * 0.5;
+    const hipY = seg.y + Math.sin(seg.angle) * seg.len * 0.5;
+
+    const fx = leg.footX;
+    const fy = leg.footY;
+
+    // Knee position: midpoint pushed outward + upward during step
+    const midX = (hipX + fx) / 2;
+    const midY = (hipY + fy) / 2;
+    const perpA = seg.angle + Math.PI / 2;
+    const kneePush = 10 + (leg.stepping ? leg.stepT * (1-leg.stepT) * 4 * 20 : 0);
+    const kx = midX + Math.cos(perpA) * leg.side * kneePush;
+    const ky = midY + Math.sin(perpA) * leg.side * kneePush;
+
+    const alpha = leg.stepping ? 0.9 : 0.65;
+
+    // Upper leg (hip → knee)
+    ctx.globalAlpha = alpha;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(hipX, hipY);
+    ctx.lineTo(kx, ky);
+    ctx.stroke();
+
+    // Lower leg (knee → foot)
+    ctx.lineWidth = 1.0;
+    ctx.beginPath();
+    ctx.moveTo(kx, ky);
+    ctx.lineTo(fx, fy);
+    ctx.stroke();
+
+    // Hip joint
+    circle(hipX, hipY, 1.8, true, alpha * 0.8);
+    // Knee joint
+    circle(kx, ky, 1.4, true, alpha * 0.7);
+    // Foot dot
+    ctx.globalAlpha = leg.stepping ? 1.0 : 0.5;
+    circle(fx, fy, leg.stepping ? 2.5 : 1.8, true, 1);
+
+    ctx.globalAlpha = 1;
+  });
+}
+
+// ─── IK Chain update
+function updateChain() {
+  // Smoothly interpolate target toward mouse
+  target.x += (mouse.x - target.x) * FOLLOW_SPEED;
+  target.y += (mouse.y - target.y) * FOLLOW_SPEED;
+
+  // Head (body[0]) follows smoothed target
+  body[0].update(target.x, target.y);
+
+  // Rest of body follows previous
+  for (let i = 1; i < BODY_SEGS; i++) {
+    body[i].update(body[i-1].x, body[i-1].y);
+  }
+
+  // Update walking legs
+  updateLegs();
+
+  // Tail follows end of body
+  tailCurlOffset += 0.018;
+  tail[0].update(body[BODY_SEGS-1].x, body[BODY_SEGS-1].y);
+
+  for (let i = 1; i < TAIL_SEGS; i++) {
+    const curlAmount = i * 0.18;
+    const baseAngle = tail[i-1].angle + Math.PI;
+    const targetAngle = baseAngle + Math.sin(tailCurlOffset + i * 0.4) * curlAmount;
+
+    const prevTip = tail[i-1];
+    const tx = prevTip.x + Math.cos(targetAngle) * TAIL_SEG_LEN;
+    const ty = prevTip.y + Math.sin(targetAngle) * TAIL_SEG_LEN;
+
+    tail[i].update(tx, ty);
+  }
+}
+
+// ─── Color based on mouse buttons
+function getColor() {
+  if (mouse.left && mouse.right) return '#ff6060';
+  if (mouse.left)  return '#60ffaa';
+  if (mouse.right) return '#ff9944';
+  return '#e0e0d0';
+}
+
+// ─── Subtle background particles
+const bgStars = Array.from({ length: 60 }, () => ({
+  x: Math.random() * canvas.width,
+  y: Math.random() * canvas.height,
+  r: Math.random() * 1.2,
+  a: Math.random() * 0.15 + 0.03
+}));
+
+function drawBackground() {
+  ctx.fillStyle = 'rgba(0,0,0,0.88)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // faint stars
+  ctx.fillStyle = '#ffffff';
+  bgStars.forEach(s => {
+    circle(s.x, s.y, s.r, true, s.a);
+  });
+}
+
+// ─── Main render
+function draw() {
+  drawBackground();
+
+  const color = getColor();
+
+  // Draw tail (behind body)
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  for (let i = TAIL_SEGS - 2; i >= 0; i--) {
+    const seg = tail[i];
+    const t = i / TAIL_SEGS;
+    const alpha = 0.5 + t * 0.3;
+    const w = 1.2 * (1 - t * 0.5);
+
+    line(seg.x, seg.y, seg.tipX, seg.tipY, alpha, w);
+    circle(seg.x, seg.y, 2 * (1 - t * 0.5), true, alpha);
+  }
+  drawStinger(tail[TAIL_SEGS - 1], color);
+
+  // Draw body segments (from tail to head)
+  for (let i = BODY_SEGS - 1; i >= 0; i--) {
+    drawBodySegment(body[i], i, BODY_SEGS, color);
+  }
+
+  // Draw all legs (on top of body)
+  drawLegs(color);
+
+  // Front claws
+  drawPedipalps(body[0], color);
+
+  // Head on top
+  drawHead(body[0], color);
+
+  // Cursor dot
+  ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 8;
+  circle(mouse.x, mouse.y, 3, true, 1);
+  ctx.shadowBlur = 0;
+}
+
+// ─── Loop
+function loop() {
+  updateChain();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
 </body>
 </html>
-
